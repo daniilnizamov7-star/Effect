@@ -200,53 +200,61 @@
     frame();
   }
 
-  // берём средний тон кожи в районе точки щипка — резинка подстраивается под освещение/тон кожи
-  function sampleSkinColor(x, y, size){
-    size = Math.max(6, Math.min(size, 24));
-    const sx = Math.min(Math.max(x - size/2, 0), canvas.width - size);
-    const sy = Math.min(Math.max(y - size/2, 0), canvas.height - size);
-    const data = ctx.getImageData(sx, sy, size, size).data;
-    let r=0,g=0,b=0,n=0;
-    for (let i=0;i<data.length;i+=4){ r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++; }
-    return `rgb(${Math.round(r/n)}, ${Math.round(g/n)}, ${Math.round(b/n)})`;
-  }
+  // маленький переиспользуемый канвас — источник тайловой текстуры кожи
+  const texCanvas = document.createElement('canvas');
+  const TEX_SIZE = 24;
+  texCanvas.width = TEX_SIZE;
+  texCanvas.height = TEX_SIZE;
+  const texCtx = texCanvas.getContext('2d');
 
   function drawStretch(handSizePx){
     const distPx = dist(anchor, smoothedHand);
     if (distPx < 6) return; // щипок почти не сдвинулся — рисовать ещё нечего
 
-    const skin = sampleSkinColor(smoothedHand.x, smoothedHand.y, 14);
+    // лёгкое желейное покачивание середины ленты — иначе резинка выглядит как мёртвая палка
+    const wobbleAmp = Math.min(distPx*0.06, 14);
+    const wobblePhase = performance.now()/160;
+    const nx = -(smoothedHand.y-anchor.y)/distPx;
+    const ny =  (smoothedHand.x-anchor.x)/distPx;
+    const midX = (anchor.x+smoothedHand.x)/2 + nx*Math.sin(wobblePhase)*wobbleAmp;
+    const midY = (anchor.y+smoothedHand.y)/2 + ny*Math.sin(wobblePhase)*wobbleAmp;
 
     // толще у тела, тоньше на длинной растяжке — имитация сохранения объёма резинки
-    const baseWidth = Math.max(10, handSizePx*0.28);
+    const baseWidth = Math.max(10, handSizePx*0.26);
     const width = Math.max(4, baseWidth - distPx*0.05);
+
+    // берём тайл кожи у точки щипка и используем как текстуру вместо плоского цвета
+    const sx = Math.min(Math.max(smoothedHand.x - TEX_SIZE/2, 0), canvas.width - TEX_SIZE);
+    const sy = Math.min(Math.max(smoothedHand.y - TEX_SIZE/2, 0), canvas.height - TEX_SIZE);
+    texCtx.drawImage(video, sx, sy, TEX_SIZE, TEX_SIZE, 0, 0, TEX_SIZE, TEX_SIZE);
+    const pattern = ctx.createPattern(texCanvas, 'repeat');
+
+    function tubePath(){
+      ctx.beginPath();
+      ctx.moveTo(anchor.x, anchor.y);
+      ctx.quadraticCurveTo(midX, midY, smoothedHand.x, smoothedHand.y);
+    }
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
     // тёмная подложка — контраст с любым фоном
-    ctx.beginPath();
-    ctx.moveTo(anchor.x, anchor.y);
-    ctx.lineTo(smoothedHand.x, smoothedHand.y);
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = width + 4;
+    tubePath();
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.lineWidth = width + 5;
     ctx.stroke();
 
-    // сама резинка — тон кожи
-    ctx.beginPath();
-    ctx.moveTo(anchor.x, anchor.y);
-    ctx.lineTo(smoothedHand.x, smoothedHand.y);
-    ctx.strokeStyle = skin;
+    // сама резинка — текстура кожи, не плоский цвет
+    tubePath();
+    ctx.strokeStyle = pattern;
     ctx.lineWidth = width;
     ctx.stroke();
 
     // блик по центру для объёма (как у трубки/жгута)
-    ctx.beginPath();
-    ctx.moveTo(anchor.x, anchor.y);
-    ctx.lineTo(smoothedHand.x, smoothedHand.y);
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = Math.max(2, width*0.35);
+    tubePath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = Math.max(2, width*0.3);
     ctx.stroke();
 
     ctx.restore();
