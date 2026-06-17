@@ -1,0 +1,11 @@
+{
+  "name": "FX Lab",
+  "short_name": "FX Lab",
+  "description": "Лаборатория AR-эффектов на руках/теле — трекинг прямо в браузере",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "orientation": "portrait",
+  "icons": []
+}
