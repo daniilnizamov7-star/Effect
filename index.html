@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FX Lab — Резинка</title>
+<meta name="theme-color" content="#0b0d10">
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{
+    --bg:#0b0d10;
+    --panel:#14171c;
+    --accent:#ffb86b;
+    --accent-dim:#ffb86b66;
+    --ok:#7ee787;
+    --text:#e7e9ec;
+    --text-dim:#9aa0a6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:'JetBrains Mono','SFMono-Regular',Consolas,monospace;overflow:hidden;}
+  #app{position:relative;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+
+  #stage{position:relative;width:100%;max-width:520px;aspect-ratio:9/16;background:#000;
+    border-radius:16px;overflow:hidden;box-shadow:0 0 0 1px #ffffff14, 0 20px 60px #00000080;}
+  video{display:none;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+
+  #hud{position:absolute;top:10px;left:10px;right:10px;display:flex;flex-direction:column;gap:2px;
+    font-size:11px;line-height:1.5;color:var(--accent);text-shadow:0 1px 2px #000;pointer-events:none;
+    letter-spacing:.02em;}
+  #hud span.dim{color:var(--text-dim);}
+  #hud span.ok{color:var(--ok);}
+
+  #hint{position:absolute;bottom:14px;left:0;right:0;text-align:center;font-size:12px;color:var(--text-dim);
+    pointer-events:none;padding:0 16px;}
+
+  #startOverlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 120% at 50% 20%, #1a1f26, #0b0d10);}
+  #startBtn{appearance:none;border:1px solid var(--accent-dim);background:#1c2128;color:var(--text);
+    font-family:inherit;font-size:14px;padding:14px 22px;border-radius:10px;cursor:pointer;letter-spacing:.02em;}
+  #startBtn:active{transform:scale(0.98);}
+  #startSub{margin-top:10px;font-size:11px;color:var(--text-dim);text-align:center;max-width:280px;}
+
+  #title{margin-bottom:14px;font-size:12px;color:var(--text-dim);letter-spacing:.12em;text-transform:uppercase;}
+  #title b{color:var(--text);}
+
+  #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;
+    padding:24px;font-size:13px;color:#ff8c8c;background:#0b0d10;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="title">FX Lab · <b>Резинка</b></div>
+  <div id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+
+    <div id="hud"></div>
+    <div id="hint">Сожми указательный и большой пальцы — рука начнёт тянуться</div>
+
+    <div id="startOverlay">
+      <div style="display:flex;flex-direction:column;align-items:center;">
+        <button id="startBtn">Включить камеру</button>
+        <div id="startSub">Трекинг руки идёт прямо в браузере,<br>видео никуда не отправляется</div>
+      </div>
+    </div>
+
+    <div id="err"></div>
+  </div>
+</div>
+
+<script type="module">
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const errBox = document.getElementById('err');
+
+  function showError(msg){
+    errBox.style.display = 'flex';
+    errBox.textContent = msg;
+  }
+
+  startBtn.addEventListener('click', start, { once:true });
+
+  async function start(){
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode:'user', width:{ ideal:720 }, height:{ ideal:1280 } },
+        audio:false
+      });
+      video.srcObject = stream;
+      await video.play();
+      await new Promise(r => {
+        if (video.readyState >= 2) return r();
+        video.onloadedmetadata = r;
+      });
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      startOverlay.style.display = 'none';
+
+      const handLandmarker = await createHandLandmarker();
+      runLoop(handLandmarker);
+    }catch(e){
+      console.error(e);
+      showError('Не удалось включить камеру: ' + e.message + '. Проверь разрешения и что страница открыта по https.');
+    }
+  }
+
+  async function createHandLandmarker(){
+    const { HandLandmarker, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest'
+    );
+    const filesetResolver = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+    );
+    const baseOptions = {
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+    };
+    try{
+      return await HandLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: { ...baseOptions, delegate:'GPU' },
+        runningMode:'VIDEO',
+        numHands:1
+      });
+    }catch(e){
+      // на части устройств GPU-делегат не поднимается — откатываемся на CPU
+      console.warn('GPU delegate failed, falling back to CPU', e);
+      return await HandLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: { ...baseOptions, delegate:'CPU' },
+        runningMode:'VIDEO',
+        numHands:1
+      });
+    }
+  }
+
+  // --- состояние эффекта "резинка" ---
+  const PINCH_RATIO_ON = 0.35;   // ниже этого порога — считаем что щипок сделан
+  const SMOOTH = 0.5;            // сглаживание точки щипка, 0..1 (больше = отзывчивее)
+
+  let stretching = false;
+  let anchor = null;        // точка, где начался щипок — стартовая точка резинки
+  let smoothedHand = null;  // сглаженная текущая точка щипка
+
+  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+  function toPx(lm){ return { x: lm.x*canvas.width, y: lm.y*canvas.height }; }
+  function lerp(a,b,t){ return { x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t }; }
+
+  function runLoop(handLandmarker){
+    let lastVideoTime = -1;
+
+    function frame(){
+      requestAnimationFrame(frame);
+      if (video.currentTime === lastVideoTime) return;
+      lastVideoTime = video.currentTime;
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const result = handLandmarker.detectForVideo(video, performance.now());
+      const lm = result.landmarks && result.landmarks[0];
+
+      let pinchOn = false;
+      let pinchRatio = null;
+
+      if (lm){
+        const wrist = toPx(lm[0]);
+        const middleMcp = toPx(lm[9]);
+        const thumbTip = toPx(lm[4]);
+        const indexTip = toPx(lm[8]);
+
+        const handSize = dist(wrist, middleMcp) || 1;
+        pinchRatio = dist(thumbTip, indexTip) / handSize;
+        pinchOn = pinchRatio < PINCH_RATIO_ON;
+
+        const pinchPoint = { x:(thumbTip.x+indexTip.x)/2, y:(thumbTip.y+indexTip.y)/2 };
+
+        if (pinchOn){
+          if (!stretching){
+            stretching = true;
+            anchor = pinchPoint;          // фиксируем старт резинки на момент щипка
+            smoothedHand = pinchPoint;
+          } else {
+            smoothedHand = lerp(smoothedHand, pinchPoint, SMOOTH);
+          }
+          drawStretch(handSize);
+        } else {
+          stretching = false;
+        }
+      } else {
+        stretching = false;
+      }
+
+      updateHud(!!lm, pinchOn, pinchRatio);
+    }
+    frame();
+  }
+
+  function drawStretch(handSizePx){
+    const distPx = dist(anchor, smoothedHand);
+    const angle = Math.atan2(smoothedHand.y-anchor.y, smoothedHand.x-anchor.x);
+
+    // источник текстуры — кусочек кожи у самой кисти, его и растягиваем
+    const patch = Math.max(20, handSizePx*0.9);
+    const srcX = Math.min(Math.max(smoothedHand.x - patch/2, 0), canvas.width - patch);
+    const srcY = Math.min(Math.max(smoothedHand.y - patch/2, 0), canvas.height - patch);
+
+    // чем дальше тянем, тем тоньше "резинка" — имитация сохранения объёма
+    const thickness = Math.max(10, handSizePx*0.55 - distPx*0.04);
+
+    ctx.save();
+    ctx.translate(anchor.x, anchor.y);
+    ctx.rotate(angle);
+    ctx.drawImage(video, srcX, srcY, patch, patch, 0, -thickness/2, Math.max(distPx,1), thickness);
+    ctx.restore();
+  }
+
+  function updateHud(handOk, pinchOn, pinchRatio){
+    hud.innerHTML =
+      `hand=<span class="${handOk?'ok':'dim'}">${handOk?'ok':'none'}</span>  ` +
+      `pinch=<span class="${pinchOn?'ok':'dim'}">${pinchOn?'ON':'off'}</span>` +
+      (pinchRatio!=null ? `  ratio=${pinchRatio.toFixed(2)}` : '') +
+      (stretching ? `  stretch=${dist(anchor,smoothedHand).toFixed(0)}px` : '');
+  }
+</script>
+</body>
+</html>
